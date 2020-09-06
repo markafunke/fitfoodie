@@ -34,6 +34,28 @@ def cross_val_cutoffs(df, cutoff_dates, mode, months = 1):
         forecast_df = pd.concat([forecast_df,forecast])
     return forecast_df
 
+
+def metrics(df):
+    df = df.groupby("cutoff")["yhat","y"].sum()
+    df["ae"] = np.abs(df['y'] - df['yhat'])
+    df["ape"] = np.abs(df["ae"] / df['y'])
+    
+    print(f"mean abs error: {round(np.mean(df.ae),-1)}")
+    print(f"mean perc error: {round(np.mean(df.ape)*100,2)}%")
+    print(f"median perc error: {round(np.median(df.ape)*100,2)}%")
+    
+    return df
+
+
+def plot_cross_val(df):
+    df = df.groupby("cutoff")["yhat","y"].sum()
+    plt.scatter(df.index,df.y)
+    plt.scatter(df.index,df.yhat)
+    plt.plot(df.index,df.y)
+    plt.plot(df.index,df.yhat);
+    
+
+
 # Load in data, adjust column names to fit prophet specifications
 df = pd.read_csv('data/Total_Views_20150101-20200831.csv')
 df.rename(columns={"Day Index": "ds", "Pageviews": "y"}, inplace=True)
@@ -52,21 +74,24 @@ holidays = covid
 cutoff_dates = pd.date_range('2017-01-01','2020-09-01', freq='1M')-pd.offsets.MonthBegin(1)
 
 forecast_df1 = cross_val_cutoffs(df,cutoff_dates, mode = "additive")
-test1 = forecast_df1.groupby("cutoff")["yhat","y"].sum()
-
-plt.scatter(test1.index,test1.y)
-plt.scatter(test1.index,test1.yhat)
-plt.plot(test1.index,test1.y)
-plt.plot(test1.index,test1.yhat)
-;
-
 forecast_df2 = cross_val_cutoffs(df,cutoff_dates, mode = "multiplicative")
-test2 = forecast_df2.groupby("cutoff")["yhat","y"].sum()
+additive = metrics(forecast_df1)
+plot_cross_val(forecast_df1)
+multiplicative = metrics(forecast_df2)
+plot_cross_val(forecast_df2)
 
-plt.plot(test2.index,test2.y)
-plt.plot(test2.index,test2.yhat)
-plt.scatter(test2.index,test2.y)
-plt.scatter(test2.index,test2.yhat)
-;
+cutoff_dates = pd.date_range('2017-01-01','2020-01-01', freq='1Y')-pd.offsets.YearBegin(1)
+forecast_df3 = cross_val_cutoffs(df,cutoff_dates, mode = "additive", months = 12)
+forecast_df4 = cross_val_cutoffs(df,cutoff_dates, mode = "multiplicative", months = 12)
+additive2 = metrics(forecast_df3)
+plot_cross_val(forecast_df3)
+multiplicative2 = metrics(forecast_df4)
+plot_cross_val(forecast_df4)
 
+#Tasks
+# Project RPM
+# Combine the forecasts
+# Build app -- MVP DONE!
+# Fine tune models
+# Add API functionality to app
 
