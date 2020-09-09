@@ -20,7 +20,23 @@ def cross_val_cutoffs(df, cutoff_dates, mode, months = 1):
         # fit model on just dates before each cutoff
         fit_cutoff = df["ds"] < cutoff
         df_fit = df[fit_cutoff]
-        model = Prophet(holidays=holidays,seasonality_mode=mode)
+
+        model = Prophet(
+            daily_seasonality=False,
+            weekly_seasonality=False,
+            yearly_seasonality=False,
+            holidays=holidays,
+            seasonality_mode=mode
+            ).add_seasonality(
+                name="yearly",
+                period = 365.25,
+                fourier_order = 10
+            ).add_seasonality(
+                name = "weekly",
+                period = 7,
+                fourier_order = 7
+            )
+        model.add_country_holidays(country_name='US')
         model.fit(df_fit)
         
         # predict model on 1 month, 3 months, 6 months, or 12 months post cutoff
@@ -33,6 +49,12 @@ def cross_val_cutoffs(df, cutoff_dates, mode, months = 1):
         forecast["cutoff"] = cutoff
         forecast_df = pd.concat([forecast_df,forecast])
     return forecast_df
+
+
+forecast_df2 = cross_val_cutoffs(df,cutoff_dates, mode = "multiplicative")
+multiplicative = metrics(forecast_df2)
+plot_cross_val(forecast_df2)
+
 
 
 def metrics(df,rpm=False):
@@ -58,10 +80,33 @@ def plot_cross_val(df):
     plt.plot(df.index,df.yhat);
     
 
-model_views = Prophet(holidays=holidays,seasonality_mode="multiplicative")
+model_views = Prophet(
+            daily_seasonality=False,
+            weekly_seasonality=False,
+            yearly_seasonality=False,
+            holidays=holidays,
+            seasonality_mode = "multiplicative",
+            # seasonality_prior_scale = 20
+            ).add_seasonality(
+                name="yearly",
+                period = 365.25,
+                fourier_order = 10,
+                mode = "multiplicative"
+            ).add_seasonality(
+                name = "weekly",
+                period = 7,
+                fourier_order = 7,
+                mode = "multiplicative"
+            )
+  
+model_views.add_country_holidays(country_name='US')
+model_views.train_holiday_names
 model_views.fit(df)
 future_views = model_views.make_future_dataframe(periods=365)
 forecast_views = model_views.predict(future_views)
+plot_views_comp = model_views.plot_components(forecast_views)
+
+help(Prophet.plot_components)
 
 plot_views = model_views.plot(forecast_views)
 plot_views_comp = model_views.plot_components(forecast_views)
@@ -70,7 +115,6 @@ model_rpm = Prophet(holidays=holidays,seasonality_mode="multiplicative")
 model_rpm.fit(df_rpm)
 future_rpm = model_rpm.make_future_dataframe(periods=365)
 forecast_rpm = model_rpm.predict(future_rpm)
-forecast_rpm = forecast_rpm[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
 plot_rpm = model_rpm.plot(forecast_rpm)
 plot_rpm_comp = model_rpm.plot_components(forecast_rpm)
 
@@ -78,17 +122,48 @@ plot_rpm_comp = model_rpm.plot_components(forecast_rpm)
 views_merge = forecast_views[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
 rpm_merge = forecast_rpm[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
 
-views_merge.rename(columns={"yhat": "yhat_v", "yhat_lower": "yhat_lower_v", "yhat_upper": "yhat_upper_v"}, inplace=True)
+views_merge.rename(columns={"yhat": "views", "yhat_lower": "views_l", "yhat_upper": "views_h"}, inplace=True)
+rpm_merge.rename(columns={"yhat": "rpm", "yhat_lower": "rpm_l", "yhat_upper": "rpm_h"}, inplace=True)
 
-earnings_df = rpm_merge.merge(views_merge, how="left", on=["ds"])    
-earnings_df["rev"] = earnings_df["yhat_v"]/1000 * earnings_df["yhat"]
-earnings_df["rev_l"] = earnings_df["yhat_lower_v"]/1000 * earnings_df["yhat_lower"]
-earnings_df["rev_h"] = earnings_df["yhat_upper_v"]/1000 * earnings_df["yhat_upper"]
+df = rpm_merge.merge(views_merge, how="left", on=["ds"])    
+df["rev"] = df["views"]/1000 * df["rpm"]
+df["rev_l"] = df["views_l"]/1000 * df["rpm_l"]
+df["rev_h"] = df["views_h"]/1000 * df["rpm_h"]
 
-earnings_df = earnings_df.merge(df, how="left", on=["ds"])
-earnings_df = earnings_df.merge(df_rpm, how="left", on=["ds"])
-earnings_df = earnings_df.rename(columns={"y_x":"y_view", "y_y":"y_rpm"})
-earnings_df["rev_actual"] = earnings_df["y_view"]/1000 * earnings_df["y_rpm"]
+df = df.merge(df_views, how="left", on=["ds"])
+df = df.merge(df_rpm, how="left", on=["ds"])
+df = df.rename(columns={"y_x":"views_true", "y_y":"rpm_true"})
+df["rev_true"] = df["views_true"]/1000 * df["rpm_true"]
+
+# Add datetime characterics for calculations
+df["day_of_week"] = df.ds.dt.day_name()
+df["week"] = df.ds.dt.isocalendar().week
+df["month"] = df.ds.dt.month
+df["year"] =df.ds.dt.year
+
+# Plot vs same week last year
+newest_row = df.dropna().sort_values("ds",ascending=False).iloc[1]
+current_day = newest_row["ds"]
+current_week = newest_row["week"]
+current_year = newest_row["year"]
+
+last_week_day = current_day - datetime.timedelta(weeks=1)
+last_year_day_high = current_day - datetime.timedelta(weeks=52)
+last_year_day_low = current_day - datetime.timedelta(weeks=53)
+
+last_yr_wk = df[(df["ds"] > last_year_day_low) & (df["ds"] <= last_year_day_high)].reset_index()
+last_wk = df[(df["ds"] > last_week_day) & (df["ds"] <= current_day)].reset_index()
+
+plt.scatter(last_yr_wk.index,last_yr_wk.views_true)
+plt.scatter(last_wk.index,last_wk.views)
+plt.plot(last_yr_wk.index,last_yr_wk.views)
+plt.plot(last_wk.index,last_wk.views)
+plt.xticks(ticks=range(7),labels=last_wk.day_of_week);
+
+# Plot vs last week
+
+
+
 
 plt.scatter(earnings_df.ds,earnings_df.rev_actual)
 plt.scatter(earnings_df.ds,earnings_df.rev);
@@ -109,15 +184,23 @@ covid = pd.DataFrame({
   'upper_window': 1,
 })
 
-holidays = covid
+# Include holidays and holiday weekends
+historic_holidays =
 
+# holidays_prior_scale (20-40), higher more impact
+
+# n_changepoints
+
+
+
+
+
+holidays = covid
 cutoff_dates = pd.date_range('2017-01-01','2020-09-01', freq='1M')-pd.offsets.MonthBegin(1)
 forecast_df1 = cross_val_cutoffs(df,cutoff_dates, mode = "additive")
-forecast_df2 = cross_val_cutoffs(df,cutoff_dates, mode = "multiplicative")
 additive = metrics(forecast_df1)
 plot_cross_val(forecast_df1)
-multiplicative = metrics(forecast_df2)
-plot_cross_val(forecast_df2)
+
 
 cutoff_dates = pd.date_range('2017-01-01','2020-01-01', freq='1Y')-pd.offsets.YearBegin(1)
 forecast_df3 = cross_val_cutoffs(df,cutoff_dates, mode = "additive", months = 12)
@@ -127,12 +210,6 @@ plot_cross_val(forecast_df3)
 multiplicative2 = metrics(forecast_df4)
 plot_cross_val(forecast_df4)
 
-#Tasks
-# Project RPM
-# Combine the forecasts
-# Build app -- MVP DONE!
-# Fine tune models
-# Add API functionality to app
 
 df_rpm = pd.read_csv('data/Earnings_2017-05-01_2020-08-31.csv')
 df_rpm.rename(columns={"Start Date": "ds", "RPM": "y"}, inplace=True)
