@@ -13,38 +13,111 @@ from fbprophet.plot import add_changepoints_to_plot, plot_cross_validation_metri
 from fbprophet.diagnostics import cross_validation, performance_metrics
 import matplotlib.pyplot as plt
 
+
+
+
+model_rpm = Prophet(
+            growth = "logistic",
+            daily_seasonality=False,
+            weekly_seasonality=False,
+            yearly_seasonality=False,
+            holidays=holidays,
+            seasonality_mode = "multiplicative",
+            # seasonality_prior_scale = 20
+            ).add_seasonality(
+                name="yearly",
+                period = 365.25,
+                fourier_order = 10,
+                mode = "multiplicative"
+            ).add_seasonality(
+                name = "weekly",
+                period = 7,
+                fourier_order = 7,
+                mode = "multiplicative"
+            ).add_seasonality(
+                name = "quarterly",
+                period = 365.25/4,
+                fourier_order = 3,
+                mode = "multiplicative"
+            )              
+  
+df_rpm["cap"] = 45
+df_rpm["floor"] = 0
+model_rpm.fit(df_rpm)
+future_rpm = model_rpm.make_future_dataframe(periods=365)
+future_rpm["cap"] = 45
+future_rpm["floor"] = 0
+
+
+
+        # model = Prophet(
+        #     daily_seasonality=False,
+        #     weekly_seasonality=False,
+        #     yearly_seasonality=False,
+        #     holidays=holidays,
+        #     seasonality_mode=mode
+        #     ).add_seasonality(
+        #         name="yearly",
+        #         period = 365.25,
+        #         fourier_order = 10
+        #     ).add_seasonality(
+        #         name = "weekly",
+        #         period = 7,
+        #         fourier_order = 7
+        #     ).add_seasonality(
+        #         name = "quarterly",
+        #         period = 365.25/4,
+        #         fourier_order = 3
+        #     )
+
+
+
 def cross_val_cutoffs(df, cutoff_dates, mode, months = 1):
     forecast_df = pd.DataFrame()
     for cutoff in cutoff_dates:
         
         # fit model on just dates before each cutoff
+        df["cap"] = 45
+        df["floor"] = 0
+        
         fit_cutoff = df["ds"] < cutoff
         df_fit = df[fit_cutoff]
 
         model = Prophet(
+            growth = "linear",
             daily_seasonality=False,
             weekly_seasonality=False,
             yearly_seasonality=False,
             holidays=holidays,
-            seasonality_mode=mode
+            seasonality_mode = "multiplicative",
+            # seasonality_prior_scale = 20
             ).add_seasonality(
                 name="yearly",
                 period = 365.25,
-                fourier_order = 10
+                fourier_order = 10,
+                mode = "multiplicative"
             ).add_seasonality(
                 name = "weekly",
                 period = 7,
-                fourier_order = 7
-            )
+                fourier_order = 7,
+                mode = "multiplicative"
+            ).add_seasonality(
+                name = "quarterly",
+                period = 365.25/4,
+                fourier_order = 3,
+                mode = "multiplicative"
+            )    
         model.add_country_holidays(country_name='US')
         model.fit(df_fit)
         
         # predict model on 1 month, 3 months, 6 months, or 12 months post cutoff
         pred_cutoff = (df["ds"] >= cutoff) & (df["ds"] < cutoff + pd.offsets.MonthBegin(months))
         df_pred = df[pred_cutoff].reset_index().drop("index",axis=1)
+        df_pred["cap"] = 45
+        df_pred["floor"] = 0
         
 
-        forecast = model.predict(df_pred[["ds"]])
+        forecast = model.predict(df_pred[["ds","cap","floor"]])
         forecast["y"] = df_pred["y"]
         forecast["cutoff"] = cutoff
         forecast_df = pd.concat([forecast_df,forecast])
@@ -54,6 +127,21 @@ def cross_val_cutoffs(df, cutoff_dates, mode, months = 1):
 forecast_df2 = cross_val_cutoffs(df,cutoff_dates, mode = "multiplicative")
 multiplicative = metrics(forecast_df2)
 plot_cross_val(forecast_df2)
+
+cutoff_dates = pd.date_range('2018-06-01','2020-03-01', freq='1M')-pd.offsets.MonthBegin(1)
+forecast_df4 = cross_val_cutoffs(df_rpm,cutoff_dates, mode = "multiplicative")
+multiplicative_rpm = metrics(forecast_df4)
+plot_cross_val(forecast_df4)
+
+test=pd.DataFrame()
+test["views_true"] = multiplicative["yhat"]
+test["views"] = multiplicative["y"]
+test["rpm_true"] = multiplicative_rpm["yhat"]
+test["rpm"] = multiplicative_rpm["y"]
+test["yhat"] = test["rpm"] * (test["views"] / 1000)
+test["y"] = test["rpm_true"] * (test["views_true"] / 1000)
+
+test_mets = metrics(test)
 
 
 
@@ -99,14 +187,53 @@ model_views = Prophet(
                 mode = "multiplicative"
             )
   
-model_views.add_country_holidays(country_name='US')
-model_views.train_holiday_names
 model_views.fit(df)
 future_views = model_views.make_future_dataframe(periods=365)
 forecast_views = model_views.predict(future_views)
 plot_views_comp = model_views.plot_components(forecast_views)
+fig2 = model_rpm.plot(forecast_views)
 
-help(Prophet.plot_components)
+
+########################################
+
+model_rpm = Prophet(
+            growth = "logistic",
+            daily_seasonality=False,
+            weekly_seasonality=False,
+            yearly_seasonality=False,
+            holidays=holidays,
+            seasonality_mode = "multiplicative",
+            # seasonality_prior_scale = 20
+            ).add_seasonality(
+                name="yearly",
+                period = 365.25,
+                fourier_order = 10,
+                mode = "multiplicative"
+            ).add_seasonality(
+                name = "weekly",
+                period = 7,
+                fourier_order = 7,
+                mode = "multiplicative"
+            ).add_seasonality(
+                name = "quarterly",
+                period = 365.25/4,
+                fourier_order = 3,
+                mode = "multiplicative"
+            )              
+  
+df_rpm["cap"] = 45
+df_rpm["floor"] = 0
+model_rpm.fit(df_rpm)
+future_rpm = model_rpm.make_future_dataframe(periods=365)
+future_rpm["cap"] = 45
+future_rpm["floor"] = 0
+forecast_rpm = model_rpm.predict(future_rpm)
+plot_rpm_comp = model_rpm.plot_components(forecast_rpm)
+fig1 = model_rpm.plot(forecast_rpm)
+
+
+########################################
+
 
 plot_views = model_views.plot(forecast_views)
 plot_views_comp = model_views.plot_components(forecast_views)
@@ -142,23 +269,38 @@ df["month"] = df.ds.dt.month
 df["year"] =df.ds.dt.year
 
 # Plot vs same week last year
+
 newest_row = df.dropna().sort_values("ds",ascending=False).iloc[1]
 current_day = newest_row["ds"]
 current_week = newest_row["week"]
 current_year = newest_row["year"]
 
+next_week_day = current_day + datetime.timedelta(weeks=1)
 last_week_day = current_day - datetime.timedelta(weeks=1)
+last_two_week_day = current_day - datetime.timedelta(weeks=2)
 last_year_day_high = current_day - datetime.timedelta(weeks=52)
 last_year_day_low = current_day - datetime.timedelta(weeks=53)
 
-last_yr_wk = df[(df["ds"] > last_year_day_low) & (df["ds"] <= last_year_day_high)].reset_index()
+next_wk = df[(df["ds"] > current_day) & (df["ds"] <= next_week_day)].reset_index()
 last_wk = df[(df["ds"] > last_week_day) & (df["ds"] <= current_day)].reset_index()
+last_wk_two = df[(df["ds"] > last_two_week_day) & (df["ds"] <= last_week_day)].reset_index()
+last_yr_wk = df[(df["ds"] > last_year_day_low) & (df["ds"] <= last_year_day_high)].reset_index()
 
 plt.scatter(last_yr_wk.index,last_yr_wk.views_true)
 plt.scatter(last_wk.index,last_wk.views)
 plt.plot(last_yr_wk.index,last_yr_wk.views)
 plt.plot(last_wk.index,last_wk.views)
 plt.xticks(ticks=range(7),labels=last_wk.day_of_week);
+
+
+
+
+
+
+
+
+
+
 
 # Plot vs last week
 
@@ -176,16 +318,17 @@ df = pd.read_csv('data/Total_Views_20150101-20200831.csv')
 df.rename(columns={"Day Index": "ds", "Pageviews": "y"}, inplace=True)
 df.ds = pd.to_datetime(df.ds)
 
-# COVID caused unusually high March views that can't be expected as a normal March seasonality
-covid = pd.DataFrame({
-  'holiday': 'covid',
-  'ds': pd.date_range('2020-03-18','2020-06-05', freq='1D'),
-  'lower_window': 0,
-  'upper_window': 1,
-})
+holidays = pd.read_csv('data/holidays.csv')
 
-# Include holidays and holiday weekends
-historic_holidays =
+# # COVID caused unusually high March views that can't be expected as a normal March seasonality
+# covid = pd.DataFrame({
+#   'holiday': 'covid',
+#   'ds': pd.date_range('2020-03-18','2020-06-05', freq='1D'),
+#   'lower_window': 0,
+#   'upper_window': 1,
+# })
+
+
 
 # holidays_prior_scale (20-40), higher more impact
 
@@ -195,7 +338,6 @@ historic_holidays =
 
 
 
-holidays = covid
 cutoff_dates = pd.date_range('2017-01-01','2020-09-01', freq='1M')-pd.offsets.MonthBegin(1)
 forecast_df1 = cross_val_cutoffs(df,cutoff_dates, mode = "additive")
 additive = metrics(forecast_df1)
@@ -222,4 +364,14 @@ additive_rpm = metrics(rpm_cv_add,rpm=True)
 plot_cross_val(rpm_cv_add)
 mult_rpm = metrics(rpm_cv_mult,rpm=True)
 plot_cross_val(rpm_cv_mult)
+
+
+
+
+
+
+
+
+
+
 

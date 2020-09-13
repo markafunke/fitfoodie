@@ -1,70 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Sep  7 12:21:12 2020
+Created on Sat Sep 12 13:42:52 2020
 
 @author: markfunke
 """
-
-from utilities import (get_data, fit_predict, merge_forecast, df_between_dates
-                    ,plotly_week, plotly_chart_wk, plotly_month, plotly_chart
-                    ,fill)
-import streamlit as st
-import pandas as pd
-import datetime
-import plotly.graph_objs as go
-from PIL import Image
-
-# SIDE BAR
-image = Image.open('fff.png')
-st.sidebar.image(image, use_column_width=True)
-
-st.sidebar.markdown("<h3 style='text-align: left; color: #00383E;'>Forecast View Options</h1>", unsafe_allow_html=True)
-
-time_period = st.sidebar.radio(
-"Dashboard View:",
-("Weekly Comparison", "Annual Forecast")
-)
-
-metric = st.sidebar.radio(
-"Metric:",
-("Pageviews", "RPM", "Earnings")
-)
-
-low_hi = st.sidebar.checkbox("Show Low & High Forecast",value=False)
-
-
-# Load latest data
-df_rpm, df_views, df_holiday = get_data()
-    
-# Fit and Predict
-forecast_views, forecast_rpm = fit_predict(df_rpm,df_views,df_holiday)
-
-# merge views and rpm together for earnings forecast
-df = merge_forecast(forecast_rpm,forecast_views,df_rpm,df_views)
-
-# create dfs for weekly plot comparison   
-next_wk = df_between_dates(df,0,1)
-this_wk = df_between_dates(df,-1,0)
-last_wk = df_between_dates(df,-2,-1)
-last_yr_wk = df_between_dates(df,-53,-52)
-
-# plot weekly comparison
-if time_period == "Weekly Comparison":
-    plotly_week(metric,next_wk,this_wk,last_wk,last_yr_wk,low_hi)
-    plotly_chart_wk(next_wk,this_wk,last_wk,last_yr_wk
-                    ,metric,bkgrd_color = '#F9F8F5')
-
-# create dfs for annual forecast plots
-past = df_between_dates(df,-26,0) 
-future = df_between_dates(df,-1,52)
-
-# plot monthly comparison
-if time_period == "Annual Forecast":
-    plotly_month(metric,past,future,low_hi)
-    plotly_chart(df)
-
- 
 
 
 import pandas as pd
@@ -170,35 +110,14 @@ y_df.rename(columns={"ga:pageviews": "views", "ga:pagePath": "post"}, inplace=Tr
 
 # top posts df
 top = pd.DataFrame()
-top["Rank"] = range(1,11)
-top["Yesterday"] = y_df.sort_values(by="views",ascending=False).reset_index().post
-top["Views"] = y_df.sort_values(by="views",ascending=False).reset_index().views
-top["Last Year"] = ly_df.sort_values(by="views",ascending=False).reset_index().post
-top["Views "] = ly_df.sort_values(by="views",ascending=False).reset_index().views
+top["Day Rank"] = range(1,11)
 
 
-# color_list = (
-# [[bkgrd_color for val in range(3)],
-# [bkgrd_color for val in range(3)],
-# [bkgrd_color for val in range(3)],
-# [bkgrd_color for val in range(3)]])
-
-# create chart
-fig5 = go.Figure(
-    data=[go.Table(
-    columnwidth = [12,80,18,80,18],
-    header=dict(values=list(top.columns),
-                fill_color='#00383E',
-                font_color="white",
-                align='left'),
-    cells=dict(values=top.iloc[:,0:].T,
-                fill_color= "#F9F8F5",
-               # format = [None, ",.2f",None,None],
-                # height = 20,
-                align='left'))
-    ])
-fig5.layout.update(height=500, width = 1000, title = "Top Posts")
-
-st.plotly_chart(fig5)
+ly_df = ly_df[ly_df["ga:pageviews"] >= 100]
+comp = ly_df.merge(views_merge, how="left", on=["ds"])    
 
 
+
+# 1 - top posts yesterday, top posts last year
+# 2 - biggest winners (min. 100 views)
+# 3 - biggest losers (min. 100 views)
