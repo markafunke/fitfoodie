@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Sep  7 11:17:40 2020
+Collection of functions used to pull views & earnings data, 
+fit & predict a Prophet time series forecast, 
+and manipulate and display a handful of graphs and tables in a Streamlit app
 
 @author: markfunke
 """
@@ -14,25 +16,23 @@ from googleapiclient.discovery import build
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 
-SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-KEY_FILE_LOCATION = './fff-time-series-d9e6714f8522.json'
-VIEW_ID = '43760827'
-
 @st.cache(allow_output_mutation=True)
 def get_data():
+    '''
+    Returns latest earnings, views, and holiday data as dataframes
+
+    '''
     # rpm earnings data from AdThrive
-    df_rpm = pd.read_csv('data/Earnings_2017-05-01_2020-08-31.csv')
+    df_rpm = pd.read_csv('data/Earnings.csv')
     df_rpm.rename(columns={"Start Date": "ds", "RPM": "y"}, inplace=True)
     df_rpm.ds = pd.to_datetime(df_rpm.ds)
     df_rpm["cap"] = 45
     df_rpm["floor"] = 0
     
     # views data from Google Analytics
-    df_views = pd.read_csv('data/Total_Views_20150101-20200831.csv')
+    df_views = pd.read_csv('data/Total_Views.csv')
     df_views.rename(columns={"Day Index": "ds", "Pageviews": "y"}, inplace=True)
     df_views.ds = pd.to_datetime(df_views.ds)
-    df_views["cap"] = 250000
-    df_views["floor"] = 0
     
     # Bring in holidays
     df_holiday = pd.read_csv('data/holidays.csv')
@@ -41,6 +41,19 @@ def get_data():
 
 @st.cache(allow_output_mutation=True)
 def fit_predict(df_rpm, df_views,df_holiday):
+    """
+    Fits Prophet model on views and RPM historical data, and returns
+    dataframe with historical and 365 days of forecasted values
+    
+    Parameters
+    ----------
+    df_rpm : dataframe with rpm named "y", and datetime column named "ds"
+    df_views : dataframe with views named "y", and datetime column named "ds"
+    df_holiday : dataframe with holiday, ds, upper_window, lower_window columns
+    See FB prophet documentation for details on requirements
+    https://facebook.github.io/prophet/docs/quick_start.html
+    
+    """
     model_views = Prophet(
             growth = "linear",
             daily_seasonality=False,
@@ -84,8 +97,6 @@ def fit_predict(df_rpm, df_views,df_holiday):
     model_rpm.fit(df_rpm)
     
     future_views = model_views.make_future_dataframe(periods=365)
-    future_views["cap"] = 250000
-    future_views["floor"] = 10000
     forecast_views = model_views.predict(future_views)
     
     future_rpm = model_rpm.make_future_dataframe(periods=365)
@@ -97,6 +108,20 @@ def fit_predict(df_rpm, df_views,df_holiday):
 
 @st.cache(allow_output_mutation=True)
 def merge_forecast(forecast_rpm,forecast_views,df_rpm,df_views):
+    """
+    Takes outputs from get_data() and fit_predict() functions
+    Merges together to create dataframes with forecasted and actual values
+    for both views and RPM, and calculates revenue.
+
+    Parameters
+    ----------
+    forecast_rpm : dataframe output from fit_predict()
+    forecast_views : dataframe output from fit_predict()
+    df_rpm : dataframe output from get_data()
+    df_views : dataframe output from get_data()
+
+    """
+    
     # merge views and rpm together for forecast
     views_merge = forecast_views[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
     rpm_merge = forecast_rpm[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
@@ -105,10 +130,13 @@ def merge_forecast(forecast_rpm,forecast_views,df_rpm,df_views):
     rpm_merge.rename(columns={"yhat": "rpm", "yhat_lower": "rpm_l", "yhat_upper": "rpm_h"}, inplace=True)
     
     df = rpm_merge.merge(views_merge, how="left", on=["ds"])    
+    
+    # calculate forecasted revenue columns based on views and RPM
     df["rev"] = df["views"]/1000 * df["rpm"]
     df["rev_l"] = df["views_l"]/1000 * df["rpm_l"]
     df["rev_h"] = df["views_h"]/1000 * df["rpm_h"]
     
+    # calculate actural revenue column based on views and RPM
     df = df.merge(df_views, how="left", on=["ds"])
     df = df.merge(df_rpm, how="left", on=["ds"])
     df = df.rename(columns={"y_x":"views_true", "y_y":"rpm_true"})
@@ -123,19 +151,49 @@ def merge_forecast(forecast_rpm,forecast_views,df_rpm,df_views):
     return df
 
 def df_between_dates(df,wk_low,wk_high):
-   # Find latest date with an observation to label as reference date
-   newest_row = df.dropna().sort_values("ds",ascending=False).iloc[0] #latest date
-   current_day = newest_row["ds"] 
-   
-   low = current_day + timedelta(weeks=wk_low)
-   high = current_day + timedelta(weeks=wk_high)
-   
-   df_range = df[(df["ds"] > low) & (df["ds"] <= high)].reset_index()
-   
-   return df_range
+    """
+    Outputs filtered dataframe within inputted week range
+    , relative to most recent date
+
+    Parameters
+    ----------
+    df : dataframe user wants to be filtered
+    wk_low : integer, in weeks, low end of range
+    wk_high : integer, in weeks, high end of range
+
+    """
+    # Find latest date with an observation to label as reference date
+    newest_row = df.dropna().sort_values("ds",ascending=False).iloc[0] #latest date
+    current_day = newest_row["ds"] 
+    
+    # Calculate low and high date compared to today
+    low = current_day + timedelta(weeks=wk_low)
+    high = current_day + timedelta(weeks=wk_high)
+    
+    # Create new dataframe limited to dates between low and high
+    df_range = df[(df["ds"] > low) & (df["ds"] <= high)].reset_index()
+    
+    return df_range
 
 def plotly_week(metric,next_wk,this_wk,last_wk,last_yr_wk,low_hi):
+    """
+    Plots overlaid daily chart comparing projection for next week to this week,
+    last week, and the same week last year.
+
+    Parameters
+    ----------
+    metric : string, "RPM", "Pageviews", or "Earnings"
+            , which metric is displayed in plot
+    next_wk : dataframe of next week views, rpm, revenue
+    this_wk : dataframe of this week views, rpm, revenue
+    last_wk : dataframe of last week views, rpm, revenue
+    last_yr_wk : dataframe of last year views, rpm, revenue
+    low_hi : Boolean, include low and high forecast lines for next week
+
+    """
     # Functionality to alter chart based on user input in metric radio button
+    # y_var is what is plotted
+    # hov_f and prefix sets the format shown in the hover on the chart
     if metric == "RPM":
         y_var = "rpm"
         hov_f = '0.1f'
@@ -151,12 +209,13 @@ def plotly_week(metric,next_wk,this_wk,last_wk,last_yr_wk,low_hi):
     
     fig = go.Figure()
     
-    # Create plot for this week, last week, 2 weeks ago, and same week last yr
+    # Create plot for each of 4 timeframes
+    # Set color, dash type, and name of each plot
     plots = [next_wk,this_wk,last_wk,last_yr_wk]
     colors = ['#A4374E','#00383E','#F7D5C6','#BFD6D5']
     names = ["Next Week","This Week","Last Week","Last Year - Same Week"]
     dash = ["dot","solid","solid","solid"]
-    for i in range(len(plots)): # allows us to split our data into three distinct groups
+    for i in range(len(plots)):
         
         df = plots[i]
         color = colors[i]
@@ -184,7 +243,7 @@ def plotly_week(metric,next_wk,this_wk,last_wk,last_yr_wk,low_hi):
             name = name,
             text=df.ds.dt.strftime('%Y/%m/%d')))
         
-    # Add two extra dotted lines plots for low and high projections
+    # Add two extra dotted lines plots for low and high projections if selected
     if low_hi:
         fig.add_trace(go.Scatter(
             x=next_wk.index, 
@@ -201,6 +260,7 @@ def plotly_week(metric,next_wk,this_wk,last_wk,last_yr_wk,low_hi):
 
     # Set graph formatting
     fig.layout.update(dict(
+        width = 800,
         title = f"Weekly {metric} Comparison",
         hovermode= 'x unified',
         plot_bgcolor='#F9F8F5',
@@ -221,7 +281,21 @@ def plotly_week(metric,next_wk,this_wk,last_wk,last_yr_wk,low_hi):
     
     
 def plotly_chart_wk(next_wk,this_wk,last_wk,last_yr_wk,metric,bkgrd_color = '#F9F8F5'):
-    
+    """
+    Plots percentage change table comparing projection for next week to this week,
+    last week, and the same week last year.
+
+    Parameters
+    ----------
+    metric : string, "RPM", "Pageviews", or "Earnings"
+            , which metric is displayed in plot
+    next_wk : dataframe of next week views, rpm, revenue
+    this_wk : dataframe of this week views, rpm, revenue
+    last_wk : dataframe of last week views, rpm, revenue
+    last_yr_wk : dataframe of last year views, rpm, revenue
+    bkgrnd_color: string, background color of table
+
+    """    
     # set y variable based on metric input
     if metric == "RPM":
         y_var = "rpm"
@@ -284,9 +358,45 @@ def plotly_chart_wk(next_wk,this_wk,last_wk,last_yr_wk,metric,bkgrd_color = '#F9
     fig_wk.layout.update(height=275, width = 700,title = "Percentage Change")
 
     st.plotly_chart(fig_wk)
-    
-def plotly_month(metric,past,future,low_hi):
+  
+def fill(df,original,fill,new,keep_fill=False):
+    """
+    Helper function used to create a single column of both
+    true past values and future forecasted values. Returns dataframe.
+
+    Parameters
+    ----------
+    df : dataframe containing past and future columns
+    original : column name of historic values used as base column
+    fill : column name of future values used to "fill" future dates of original column
+    new : name of new column containing both past and future values
+    keep_fill : boolean, default False.
+                Set to true to replace the "fill" column with the "new" column
+    """
+    df[new] = df[original]
+    df[new].fillna(df[fill],inplace=True)
+    if keep_fill:
+        df[fill] = df[new]
+    return df
+
+  
+def plotly_annual(metric,past,future,low_hi):
+    """
+    Plots time series of 7 day moving average historical and future values
+    for selected metric
+
+    Parameters
+    ----------
+    metric : string, "RPM", "Pageviews", or "Earnings"
+            , which metric is displayed in plot
+    past : dataframe of past views, rpm, revenue
+    future : dataframe of future week views, rpm, revenue
+    low_hi : Boolean, include low and high forecast lines
+
+    """
     # Functionality to alter chart based on user input in metric radio button
+    # y_var is what is plotted
+    # hov_f and prefix sets the format shown in the hover on the chart
     if metric == "RPM":
         y_var = "rpm"
         hov_f = '.1f'
@@ -299,26 +409,34 @@ def plotly_month(metric,past,future,low_hi):
         y_var = "rev"
         hov_f = '0f'
         prefix = '$'
-    
+     
+    # fills single overlapping week in "future" time period with past time
+    # period values. This is so line chart connects at one point and 
+    # appears to be continuous
+    for item in ["views","rev","rpm"]:
+        future = fill(future,f"{item}_true",f"{item}","temp",True)
+        future = fill(future,f"{item}_true",f"{item}_l","temp",True)
+        future = fill(future,f"{item}_true",f"{item}_h","temp",True)
+        
     fig = go.Figure()
     
-    # Create plot for this week, last week, 2 weeks ago, and same week last yr
+    # Create plot for past and future time periods
+    # choose colors and name of each plot
     plots = [past,future]
     colors = ['#00383E','#A4374E']
     names = ['Historical','Forecast']
-    for i in range(len(plots)): # allows us to split our data into three distinct groups
-        
+    for i in range(len(plots)):
         df = plots[i]
         color = colors[i]
         name = names[i]
         x = df.ds
         y = eval(f"df.{y_var}")
         if i == 0:
-            y = eval(f"df.{y_var}_true") # want actual values for every week but projection
+            y = eval(f"df.{y_var}_true") # want actual values for historical period
     
         fig.add_trace(go.Scatter(
             x = x,
-            y = y.rolling(window=7).mean(),
+            y = y.rolling(window=7).mean(), # plot 7 day rolling average
             mode = 'lines',
             marker = dict(
                 size=10,
@@ -329,6 +447,7 @@ def plotly_month(metric,past,future,low_hi):
             name = name,
             text=df.ds.dt.strftime('%Y/%m/%d')))
         
+    # Add two extra dotted lines plots for low and high projections if selected        
     if low_hi:
         fig.add_trace(go.Scatter(
             x=future.ds, 
@@ -361,38 +480,43 @@ def plotly_month(metric,past,future,low_hi):
             # tickformat='%b %y'
             )))
 
-    # Post to streamlit'
+    # Post to streamlit
     st.plotly_chart(fig)
-    
 
-def fill(df,original,fill,new):
-    df[new] = df[original]
-    df[new].fillna(df[fill],inplace=True)
-    return df
 
-def plotly_chart(df):
+def plotly_chart_annual(df):
+    """
+    Plots a chart of the current year, summarized by month.
+    Columns are RPM, Views, and Revenue for each month.
+    Highlights future months in pink.
+
+    Parameters
+    ----------
+    metric : dataframe output from merge_forecast()
+
+    """    
     
-    
-    newest_row = df.dropna().sort_values("ds",ascending=False).iloc[0] #latest date
+    # calculate most recent day, month, and year
+    newest_row = df.dropna().sort_values("ds",ascending=False).iloc[0]
     current_month = newest_row["ds"].month
     current_year = newest_row["ds"].year
     
-    # Fill one column with all values in order to sum by month
+    # Fill one column with all past and future values in order to sum by month
+    # Currently past views are in one column and future are in another column
     # Currently there is a break from views to views_true once we move to the future
-    # Unless the projection happens right at a month cutoff, we need to combine
-    # days from both columns to make the projection for the month
     for item in ["views","rev","rpm"]:
         df = fill(df,f"{item}_true",f"{item}",f"{item}_proj")
         df = fill(df,f"{item}_true",f"{item}_l",f"{item}_proj_l")
         df = fill(df,f"{item}_true",f"{item}_h",f"{item}_proj_h")
     
+    # Group by month
     annual = (df.groupby(["year","month"])
                         ["views_proj","views_proj_l","views_proj_h",
                          "rev_proj","rev_proj_l","rev_proj_h"]).sum().reset_index()
     
+    # Add a total column to the bottom of the chart
     total = (annual.groupby(["year"])["views_proj","views_proj_l","views_proj_h",
                          "rev_proj","rev_proj_l","rev_proj_h"]).sum().reset_index()
-    
     annual = pd.concat([annual,total])
     
     # Back into RPM from revenue and views
@@ -400,27 +524,27 @@ def plotly_chart(df):
     annual["rpm_proj_h"] = annual["rev_proj_h"] / (annual["views_proj_h"]/1000)
     annual["rpm_proj_l"] = annual["rev_proj_l"] / (annual["views_proj_l"]/1000)
     
-    # Format Yearmo
+    # Format Yearmo, limit to just current year
     annual["Year_Month"] = pd.to_datetime(annual[["year","month"]].assign(DAY=1)).dt.strftime('%b %y')
     annual = annual[annual.year == current_year]
-    annual.Year_Month.fillna("Total",inplace=True)
+    annual.Year_Month.fillna("Total",inplace=True) #format total column 
     
-    # Format Numerics
+    # Format numeric columns
     annual = annual[["Year_Month","views_proj","rpm_proj","rev_proj"]]
     annual['rev_proj']=annual['rev_proj'].map('${:,.0f}'.format)
     annual['rpm_proj']=annual['rpm_proj'].map('${:,.2f}'.format)
     annual['views_proj']=annual['views_proj'].map('{:,.0f}'.format)
     
-    # Rename for nice chart viewing
+    # Rename all columns for nice chart viewing
     annual.rename(columns={"Year_Month": "Month", "rev_proj": "Revenue"
                            , "views_proj":"Views", "rpm_proj": "RPM"},inplace=True)
     
     # Color row differently for all rows that have yet to be completed
     color_list = (
-    [['#FBEBE3' if val >= current_month else '#F9F8F5' for val in range(11)],
-    ['#FBEBE3' if val >= current_month else '#F9F8F5' for val in range(11)],
-    ['#FBEBE3' if val >= current_month else '#F9F8F5' for val in range(11)],
-    ['#FBEBE3' if val >= current_month else '#F9F8F5' for val in range(11)]])
+    [['#FBEBE3' if val >= current_month - 1 else '#F9F8F5' for val in range(11)],
+    ['#FBEBE3' if val >= current_month - 1 else '#F9F8F5' for val in range(11)],
+    ['#FBEBE3' if val >= current_month - 1 else '#F9F8F5' for val in range(11)],
+    ['#FBEBE3' if val >= current_month - 1 else '#F9F8F5' for val in range(11)]])
     
     fig_month = go.Figure(
         data=[go.Table(
@@ -438,6 +562,14 @@ def plotly_chart(df):
     fig_month.layout.update(height=475)
 
     st.plotly_chart(fig_month)
+
+# Google API code all referenced from an example here:
+# https://github.com/Zrce/Python-Pandas-SEO-Videos/blob/master/Analytics%20Big%20Beach%20Spring%20Break.ipynb
+
+# Google API & view id reference by functions below
+SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
+KEY_FILE_LOCATION = './fff-time-series-key.json'
+VIEW_ID = '43760827'
 
 def initialize_analyticsreporting():
   credentials = ServiceAccountCredentials.from_json_keyfile_name(
@@ -501,7 +633,6 @@ def handle_report(analytics,pagetoken,rows, start_date, end_date):
             nicerows.append(dic)
         return nicerows
 
-#Start
 def top_posts(start_date,end_date):    
     analytics = initialize_analyticsreporting()
     
@@ -512,11 +643,16 @@ def top_posts(start_date,end_date):
     rows = handle_report(analytics,'0',rows,start_date,end_date)
 
     dfanalytics = pd.DataFrame(list(rows))
-    # dfanalytics.sort_values(by=['ga:pageviews'], ascending=False).head(10)
     
     return dfanalytics
  
 def top_post_dfs():
+    """
+    Leverages Google API to pull all daily posts and views for:
+        yesterday, last week, and one year ago
+    Returns a dataframe of each.
+
+    """
     today = pd.to_datetime(datetime.date(datetime.now()))
     yesterday = (today - timedelta(days = 1))
     last_wk = (today - timedelta(weeks = 1))
@@ -536,17 +672,26 @@ def top_post_dfs():
     return y_df, lw_df, ly_df
 
 def top_post_compare(df_main,df_comp,comp_name):
+    """
+    Creates plotly table comparing top 10 posts and views from two time periods
+
+    Parameters
+    ----------
+    df_main : dataframe output from top_post_dfs(), yesterday's views
+    df_comp : dataframe output from top_post_dfs(), period to compare
+    comp_name : string, name of comparison period
+
+    """
     top = pd.DataFrame()
     top["Day Rank"] = range(1,11)
+    top[f"{comp_name} Post"] = df_comp.sort_values(by="views",ascending=False).reset_index().post
+    top[f"{comp_name} Views"] = df_comp.sort_values(by="views",ascending=False).reset_index().views    
     top["Yesterday Post"] = df_main.sort_values(by="views",ascending=False).reset_index().post
     top["Yesterday Views"] = df_main.sort_values(by="views",ascending=False).reset_index().views
-    top[f"{comp_name} Post"] = df_comp.sort_values(by="views",ascending=False).reset_index().post
-    top[f"{comp_name} Views"] = df_comp.sort_values(by="views",ascending=False).reset_index().views
-    
-    
+
+    top[f"{comp_name} Views"]=top[f"{comp_name} Views"].map('{:,.0f}'.format)   
     top["Yesterday Views"]=top["Yesterday Views"].map('{:,.0f}'.format)
-    top[f"{comp_name} Views"]=top[f"{comp_name} Views"].map('{:,.0f}'.format)
-    
+
     # create chart
     fig5 = go.Figure(
         data=[go.Table(
@@ -566,6 +711,19 @@ def top_post_compare(df_main,df_comp,comp_name):
     st.plotly_chart(fig5)
     
 def biggest_gainers(df_main,df_comp,comp_name,gain = True):
+    """
+    Creates plotly table comparing top 10 % gain or loss of yesterday's posts
+    to posts from a prior time period. Minimum 100 views in prior period
+    to qualify.
+
+    Parameters
+    ----------
+    df_main : dataframe output from top_post_dfs(), yesterday's views
+    df_comp : dataframe output from top_post_dfs(), period to compare
+    comp_name : string, name of comparison period
+    gain: boolean, default True. False compares top losers instead of gainers.
+
+    """    
     df_main.rename(columns={"views":"main_views"},inplace=True)
     df_comp.rename(columns={"views":"comp_views"},inplace=True)    
     df_comp = df_comp[df_comp["comp_views"] >= 100]
